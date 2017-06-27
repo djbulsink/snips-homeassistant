@@ -65,11 +65,11 @@ automation: !include automations.yaml
 
 light:
   platform: hue
-  host: 192.168.X.Y
+  host: 192.168.X.X
 
 mqtt:
   broker: 127.0.0.1
-  port: 9898
+  port: 1883
 
 snips:
   intents:
@@ -78,4 +78,3 @@ snips:
         - service: light.turn_on
           data_template:
             entity_id: light.{{ objectLocation | replace(" ","_") }}
-            color_name: {{ objectColor }}

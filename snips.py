@@ -4,19 +4,19 @@ Support for Snips on-device ASR and NLU.
 For more details about this component, please refer to the documentation at
 https://home-assistant.io/components/snips/
 """
-from homeassistant.helpers import template, script, config_validation as cv
-import homeassistant.loader as loader
-import voluptuous as vol
 import copy
 import json
 import logging
+import voluptuous as vol
+from homeassistant.helpers import template, script, config_validation as cv
+import homeassistant.loader as loader
 
 DOMAIN = 'snips'
 DEPENDENCIES = ['mqtt']
-CONF_TOPIC = 'topic'
-DEFAULT_TOPIC = '#'
 CONF_INTENTS = 'intents'
 CONF_ACTION = 'action'
+
+INTENT_TOPIC = 'hermes/nlu/intentParsed'
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,27 +32,26 @@ CONFIG_SCHEMA = vol.Schema({
 
 
 def setup(hass, config):
-    LOGGER.info("The 'snips' component is ready!")
-
+    """Activate Snips component."""
     mqtt = loader.get_component('mqtt')
-    topic = config[DOMAIN].get(CONF_TOPIC, DEFAULT_TOPIC)
     intents = config[DOMAIN].get(CONF_INTENTS, {})
     handler = IntentHandler(hass, intents)
 
     def message_received(topic, payload, qos):
-        if topic == 'hermes/nlu/intentParsed':
-            LOGGER.info("New intent: {}".format(payload))
-            handler.handle_intent(payload)
+        """Handle new messages on MQTT."""
+        LOGGER.debug("New intent: %s", str(payload))
+        handler.handle_intent(payload)
 
-    LOGGER.info("Subscribing to topic " + str(topic))
-    mqtt.subscribe(hass, topic, message_received)
+    mqtt.subscribe(hass, INTENT_TOPIC, message_received)
 
     return True
 
 
 class IntentHandler(object):
+    """Help handling intents."""
 
     def __init__(self, hass, intents):
+        """Initialize the intent handler."""
         self.hass = hass
         intents = copy.deepcopy(intents)
         template.attach(hass, intents)
@@ -65,19 +64,22 @@ class IntentHandler(object):
         self.intents = intents
 
     def handle_intent(self, payload):
-        if not payload:
+        """Handle an intent."""
+        try:
+            response = json.loads(payload)
+        except TypeError:
             return
-        response = json.loads(payload)
-        if not response:
+
+        if response is None:
             return
 
         name = self.get_name(response)
-        if not name:
+        if name is None:
             return
 
         config = self.intents.get(name)
 
-        if not config:
+        if config is None:
             LOGGER.warning("Received unknown intent %s", name)
             return
 
@@ -87,34 +89,51 @@ class IntentHandler(object):
             slots = self.parse_slots(response)
             action.run(slots)
 
-    def get_name(self, response):
-        try:
-            return response['intent']['intentName'].split('__')[-1]
-        except:
-            return None
-
     def parse_slots(self, response):
-        slots = response["slots"]
-        if not slots:
+        """Parse the intent slots."""
+        try:
+            slots = iter(response["slots"])
+        except KeyError:
             return {}
+
         parameters = {}
+
         for slot in slots:
-            key = slot["slotName"]
+            try:
+                key = slot["slot_name"]
+            except KeyError:
+                continue
             value = self.get_value(slot)
-            parameters[key] = value
+            if (key is not None) and (value is not None):
+                parameters[key] = value
+
         return parameters
 
-    def get_value(self, slot):
+    @staticmethod
+    def get_name(response):
+        """Extract the name of an intent."""
         try:
-            return slot["value"]["value"]["value"]
-        except:
-            pass
+            return response['intent']['intent_name'].split('__')[-1]
+        except KeyError:
+            return None
+
+    @staticmethod
+    def get_value(slot):
+        """Return the value of a given slot."""
         try:
-            return slot["value"]["value"]
-        except:
-            pass
-        try:
-            return slot["value"]
-        except:
-            pass
+            value = slot["value"]
+            kind = value["kind"]
+        except KeyError:
+            return None
+
+        if kind == "Custom":
+            try:
+                return value["value"]
+            except KeyError:
+                return None
+        elif kind == "Builtin":
+            try:
+                return value["value"]["value"]
+            except KeyError:
+                return None
         return None
